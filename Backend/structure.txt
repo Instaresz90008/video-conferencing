@@ -1,0 +1,27 @@
+backend/
+├── src/
+│   ├── config/
+│   │   ├── database.js
+│   │   └── cors.js
+│   ├── controllers/
+│   │   ├── authController.js
+│   │   └── meetingController.js
+│   ├── middleware/
+│   │   └── auth.js
+│   ├── models/
+│   │   ├── Meeting.js
+│   │   └── User.js
+│   ├── routes/
+│   │   ├── auth.js
+│   │   └── meetings.js
+│   ├── services/
+│   │   ├── authService.js
+│   │   └── meetingService.js
+│   ├── sockets/
+│   │   └── socketHandlers.js
+│   ├── utils/
+│   │   └── helpers.js
+│   └── app.js
+├── server.js
+├── package.json
+└── .env
