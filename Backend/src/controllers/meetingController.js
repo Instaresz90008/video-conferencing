@@ -253,10 +253,6 @@
 
 
 
-
-
-
-
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const Meeting = require('../models/Meeting');
@@ -268,6 +264,7 @@ const JWT_SECRET = process.env.JWT_SECRET;
 class MeetingController {
   static async createMeeting(req, res) {
     try {
+      console.log("user data",req.user)
       const { name, hostName, isPublic, password, maxParticipants, duration } = req.body;
       
       if (!name || !hostName) {
@@ -411,6 +408,48 @@ class MeetingController {
         }
       }
 
+      // CRITICAL FIX 1: Check if participant already exists (prevent duplicates on refresh)
+      const existingParticipant = await Meeting.findParticipantByName(meetingId, participantName);
+      if (existingParticipant && existingParticipant.is_active) {
+        console.log('Participant already exists, reusing:', existingParticipant);
+        
+        // CRITICAL FIX 2: Determine host status correctly
+        const isHost = req.user && req.user.userId === meeting.host_id;
+        
+        // Generate new session token for existing participant
+        const token = jwt.sign(
+          { 
+            participantId: existingParticipant.id, 
+            meetingId, 
+            participantName, 
+            isHost,
+            type: 'meeting_session',
+            joinedAt: existingParticipant.joined_at
+          },
+          JWT_SECRET,
+          { expiresIn: '24h', algorithm: 'HS512' }
+        );
+
+        return res.json({ 
+          success: true, 
+          message: 'Rejoined meeting successfully',
+          data: {
+            token, 
+            participantId: existingParticipant.id,
+            isHost,
+            meetingId,
+            participantName,
+            meeting: {
+              id: meeting.id,
+              name: meeting.name,
+              hostName: meeting.host_name,
+              isPublic: meeting.is_public,
+              maxParticipants: meeting.max_participants
+            }
+          }
+        });
+      }
+
       // Check participant limit
       const participantCount = await Meeting.getParticipantCount(meetingId);
       if (participantCount >= meeting.max_participants) {
@@ -423,15 +462,27 @@ class MeetingController {
       // Generate participant ID
       const participantId = `participant_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       
-      // Add participant to meeting
-      await Meeting.addParticipant(meetingId, participantId, participantName);
+      // CRITICAL FIX 3: Properly determine host status
+      const isHost = req.user && req.user.userId ===  Number(meeting.host_id);
+      
+      console.log('Host determination:', {
+        requestUserId: req.user?.userId,
+        meetingHostId: meeting.host_id,
+        participantName,
+        isHost,
+        isAuthenticated: !!req.user
+      });
+      
+      // Add participant to meeting with correct host status
+      await Meeting.addParticipant(meetingId, participantId, participantName, isHost);
 
-      // Generate session token for meeting access (no user authentication required)
+      // Generate session token for meeting access
       const token = jwt.sign(
         { 
           participantId, 
           meetingId, 
           participantName, 
+          isHost,
           type: 'meeting_session',
           joinedAt: new Date().toISOString()
         },
@@ -445,6 +496,7 @@ class MeetingController {
         name: participantName,
         isVideo: false,
         isAudio: false,
+        isHost,
         joinedAt: new Date().toISOString()
       });
 
@@ -454,6 +506,7 @@ class MeetingController {
         data: {
           token, 
           participantId,
+          isHost, // CRITICAL: Return correct host status
           meetingId,
           participantName,
           meeting: {
@@ -486,7 +539,8 @@ class MeetingController {
         });
       }
 
-      await Meeting.removeParticipant(meetingId, participantId);
+      // Mark participant as inactive instead of deleting (for rejoining capability)
+      await Meeting.deactivateParticipant(meetingId, participantId);
       
       // Notify other participants via WebSocket
       notifyParticipantLeft(meetingId, participantId, 'left');
@@ -559,9 +613,15 @@ class MeetingController {
 
       const participants = await Meeting.getParticipants(meetingId);
       
+      // Add host information to participants
+      const participantsWithHostInfo = participants.map(participant => ({
+        ...participant,
+        isHost: participant.is_host || false
+      }));
+      
       res.json({
         success: true,
-        data: participants
+        data: participantsWithHostInfo
       });
     } catch (error) {
       console.error('Error fetching participants:', error);
