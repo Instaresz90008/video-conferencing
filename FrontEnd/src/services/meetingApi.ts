@@ -30,6 +30,22 @@ export interface JoinMeetingRequest {
   password?: string;
 }
 
+export interface JoinMeetingResponse {
+  success: boolean;
+  token?: string;
+  participantId?: string;
+  isHost?: boolean; // Added isHost to response interface
+  meetingId?: string;
+  participantName?: string;
+  meeting?: {
+    id: string;
+    name: string;
+    hostName: string;
+    isPublic: boolean;
+    maxParticipants: number;
+  };
+}
+
 export interface ApiResponse<T> {
   success: boolean;
   message?: string;
@@ -222,7 +238,7 @@ class MeetingApiService {
     });
   }
 
-  async joinMeeting(data: JoinMeetingRequest): Promise<{ success: boolean; token?: string; participantId?: string }> {
+  async joinMeeting(data: JoinMeetingRequest): Promise<JoinMeetingResponse> {
     // Validate and extract proper meeting ID
     const validMeetingId = this.extractMeetingId(data.meetingId);
     if (!validMeetingId) {
@@ -241,7 +257,7 @@ class MeetingApiService {
     // Check for active join request for this meeting
     if (this.activeJoinRequests.has(requestKey)) {
       console.log(`⚡ Deduplicating join request for ${validMeetingId}`);
-      return this.activeJoinRequests.get(requestKey) as Promise<{ success: boolean; token?: string; participantId?: string }>;
+      return this.activeJoinRequests.get(requestKey) as Promise<JoinMeetingResponse>;
     }
 
     const joinPromise = this._performJoin(validMeetingId, data);
@@ -253,7 +269,10 @@ class MeetingApiService {
       // Mark as joined only if successful
       if (result.success) {
         this.joinedMeetings.add(validMeetingId);
-        console.log(`✅ Successfully joined meeting ${validMeetingId}`);
+        console.log(`✅ Successfully joined meeting ${validMeetingId}`, {
+          isHost: result.isHost,
+          participantId: result.participantId
+        });
       }
       
       return result;
@@ -266,7 +285,7 @@ class MeetingApiService {
   private async _performJoin(
     validMeetingId: string, 
     data: JoinMeetingRequest
-  ): Promise<{ success: boolean; token?: string; participantId?: string }> {
+  ): Promise<JoinMeetingResponse> {
     try {
       const encodedMeetingId = encodeURIComponent(validMeetingId);
       
@@ -284,7 +303,15 @@ class MeetingApiService {
         })
       );
 
-      const result = await this.handleApiResponse<{ token: string; participantId: string }>(response);
+      // Updated to handle the full join response structure from backend
+      const result = await this.handleApiResponse<JoinMeetingResponse>(response);
+
+      console.log('📋 Join response received:', {
+        success: result.success,
+        isHost: result.isHost,
+        participantId: result.participantId,
+        meetingId: result.meetingId
+      });
 
       // Ensure real-time connection before subscribing
       const realTimeConnected = await this.ensureRealTimeConnection();
@@ -300,7 +327,11 @@ class MeetingApiService {
       return {
         success: true,
         token: result.token,
-        participantId: result.participantId
+        participantId: result.participantId,
+        isHost: result.isHost || false, // CRITICAL: Extract isHost from backend response
+        meetingId: result.meetingId || validMeetingId,
+        participantName: result.participantName || data.participantName,
+        meeting: result.meeting
       };
     } catch (error) {
       console.error('Primary meeting join failed, using fallback:', error);

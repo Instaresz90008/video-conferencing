@@ -2,7 +2,7 @@ import React, { useEffect } from 'react';
 import { cn } from "@/lib/utils";
 import { UserMinus, X, Crown, Mic, MicOff, Video, VideoOff, MoreVertical } from "lucide-react";
 import { useAppSelector, useAppDispatch } from '@/store/hooks';
-import { kickParticipant, fetchParticipants, addParticipant, updateParticipant } from '@/store/meetingSlice';
+import { kickParticipantAction, fetchParticipants, addParticipant, updateParticipant, handleParticipantUpdate } from '@/store/meetingSlice';
 import { Button } from "@/components/ui/button";
 import { toast } from "@/hooks/use-toast";
 import {
@@ -11,6 +11,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { realTimeService } from '@/services/realTimeService';
 
 interface ParticipantsPanelProps {
   className?: string;
@@ -26,116 +27,84 @@ const ParticipantsPanel: React.FC<ParticipantsPanelProps> = ({
   const dispatch = useAppDispatch();
   const { participants, roomName, isHost, participantId } = useAppSelector(state => state.meeting);
   
-  // Process WebRTC signals for participant management
+  // Subscribe to real-time participant updates
   useEffect(() => {
-    const handleWebRTCSignal = (event: MessageEvent) => {
-      const data = JSON.parse(event.data);
-      
-      if (data.type === 'webrtc_signal' && data.signal) {
-        console.log('🎯 Processing WebRTC signal:', data);
-        
-        switch (data.signal.type) {
-          case 'participant_joined':
-            console.log('➕ Participant joined:', data.signal.participantId);
-            
-            // Skip if this is our own participant ID to prevent self-duplication
-            if (data.signal.participantId === participantId) {
-              console.log('🚫 Skipping self-participant event');
-              break;
-            }
-            
-            // Check if participant already exists
-            const existingParticipant = participants.find(p => p.id === data.signal.participantId);
-            
-            if (!existingParticipant) {
-              // Only add if we have a proper name or it's a different participant
-              const participantName = data.signal.participantName || data.signal.name;
-              
-              // Skip if no proper name is provided (likely a phantom/duplicate event)
-              if (!participantName || participantName === data.signal.participantId) {
-                console.log('🚫 Skipping participant with no proper name:', data.signal);
-                break;
-              }
-              
-              // Add new participant to Redux state
-              dispatch(addParticipant({
-                id: data.signal.participantId,
-                name: participantName,
-                isVideo: data.signal.isVideo || false,
-                isAudio: data.signal.isAudio || false,
-                isSpeaking: false,
-                isScreenSharing: false,
-                isHost: data.signal.isHost || false,
-                isLocal: false, // This is definitely not local since we filtered out self above
-                joinedAt: new Date().toISOString(),
-                hasStream: false
-              }));
-              
-              toast({
-                title: "Participant joined",
-                description: `${participantName} joined the meeting`,
-                open: true,
-              });
-            }
-            break;
-            
-          case 'participant_left':
-            console.log('➖ Participant left:', data.signal.participantId);
-            dispatch(kickParticipant(data.signal.participantId));
-            break;
-            
-          case 'participant_updated':
-            console.log('🔄 Participant updated:', data.signal);
-            dispatch(updateParticipant({
-              id: data.signal.participantId,
-              updates: data.signal.updates
-            }));
-            break;
-        }
-      }
+    if (!roomName) return;
+
+    const handleParticipantUpdates = (data: any) => {
+      console.log('Real-time participant update received:', data);
+      dispatch(handleParticipantUpdate(data));
     };
 
-    // Listen for WebSocket messages (adjust this based on your WebSocket implementation)
-    // You might need to access your WebSocket instance differently
-    if (typeof window !== 'undefined' && window.addEventListener) {
-      window.addEventListener('webrtc-signal', handleWebRTCSignal);
-      
-      return () => {
-        window.removeEventListener('webrtc-signal', handleWebRTCSignal);
-      };
-    }
-  }, [dispatch, participants, participantId]);
+    // Subscribe to participant events
+    realTimeService.subscribe(`meeting:${roomName}:participants`, handleParticipantUpdates);
+
+    return () => {
+      // Cleanup subscription when component unmounts or roomName changes
+      realTimeService.unsubscribe(`meeting:${roomName}:participants`, handleParticipantUpdates);
+    };
+  }, [roomName, dispatch]);
   
   // Fetch participants when panel opens or meeting changes
   useEffect(() => {
     if (isOpen && roomName) {
-      console.log('🔄 Fetching participants for meeting:', roomName);
+      console.log('Fetching participants for meeting:', roomName);
       dispatch(fetchParticipants(roomName));
     }
   }, [isOpen, roomName, dispatch]);
   
-  const handleKickParticipant = (targetParticipantId: string, participantName: string) => {
+  const handleKickParticipant = async (targetParticipantId: string, participantName: string) => {
     if (!isHost) {
       toast({
         title: "Permission denied",
         description: "Only the host can remove participants",
         variant: "destructive",
-        open: true,
+      });
+      return;
+    }
+
+    if (targetParticipantId === participantId) {
+      toast({
+        title: "Cannot remove yourself",
+        description: "You cannot remove yourself from the meeting",
+        variant: "destructive",
       });
       return;
     }
     
-    dispatch(kickParticipant(targetParticipantId));
-    toast({
-      title: "Participant removed",
-      description: `${participantName} has been removed from the meeting`,
-      open: true,
-    });
+    try {
+      await dispatch(kickParticipantAction(targetParticipantId)).unwrap();
+      
+      toast({
+        title: "Participant removed",
+        description: `${participantName} has been removed from the meeting`,
+      });
+    } catch (error) {
+      console.error('Failed to kick participant:', error);
+      toast({
+        title: "Failed to remove participant",
+        description: "An error occurred while removing the participant",
+        variant: "destructive",
+      });
+    }
   };
   
-  // Debug logging
-  console.log('👥 Participants Panel - Current participants:', participants);
-  console.log('👑 Is host:', isHost, 'Participant ID:', participantId);
+  // Sort participants to show host first, then local user, then others
+  const sortedParticipants = [...participants].sort((a, b) => {
+    // Host first
+    if (a.isHost && !b.isHost) return -1;
+    if (!a.isHost && b.isHost) return 1;
+    
+    // Then local user
+    if (a.isLocal && !b.isLocal) return -1;
+    if (!a.isLocal && b.isLocal) return 1;
+    
+    // Then alphabetically by name
+    return (a.name || '').localeCompare(b.name || '');
+  });
+  
+  console.log('Participants Panel - Current participants:', sortedParticipants);
+  console.log('Is host:', isHost, 'Participant ID:', participantId);
   
   return (
     <div className={cn(
@@ -171,13 +140,16 @@ const ParticipantsPanel: React.FC<ParticipantsPanelProps> = ({
             </Button>
           </div>
         ) : (
-          participants.map(participant => {
-            // Fix host detection - use isHost property from participant or meeting state
-            const isParticipantHost = participant.isHost || (isHost && participant.isLocal);
+          sortedParticipants.map(participant => {
+            // Use the participant's isHost property directly from backend
+            const isParticipantHost = participant.isHost || false;
             
             // Safe name handling with fallbacks
             const displayName = participant.name || participant.id || 'Unknown User';
             const avatarLetter = displayName.charAt(0).toUpperCase();
+            
+            // Check if this participant can be kicked (not self, not if user isn't host)
+            const canKick = isHost && !participant.isLocal && participant.id !== participantId;
             
             return (
               <div 
@@ -196,17 +168,22 @@ const ParticipantsPanel: React.FC<ParticipantsPanelProps> = ({
                     )}
                   </div>
                   
-                  <div>
+                  <div className="flex-1 min-w-0">
                     <div className="flex items-center">
-                      <span className="font-medium">{displayName}</span>
+                      <span className="font-medium truncate">{displayName}</span>
                       {participant.isLocal && (
-                        <span className="ml-2 text-xs bg-white/20 py-0.5 px-2 rounded-full">
+                        <span className="ml-2 text-xs bg-white/20 py-0.5 px-2 rounded-full flex-shrink-0">
                           You
+                        </span>
+                      )}
+                      {isParticipantHost && (
+                        <span className="ml-2 text-xs bg-amber-500/20 text-amber-400 py-0.5 px-2 rounded-full flex-shrink-0">
+                          Host
                         </span>
                       )}
                     </div>
                     
-                    <div className="flex items-center space-x-1 text-xs text-white/70">
+                    <div className="flex items-center space-x-1 text-xs text-white/70 mt-1">
                       {participant.isAudio ? (
                         <Mic className="w-3 h-3 text-green-400" />
                       ) : (
@@ -236,11 +213,11 @@ const ParticipantsPanel: React.FC<ParticipantsPanelProps> = ({
                   </div>
                 </div>
                 
-                {/* Actions for non-local participants */}
-                {!participant.isLocal && isHost && (
+                {/* Actions for participants that can be managed */}
+                {canKick && (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-white/10">
+                      <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-white/10 flex-shrink-0">
                         <MoreVertical className="h-4 w-4" />
                       </Button>
                     </DropdownMenuTrigger>
@@ -266,7 +243,10 @@ const ParticipantsPanel: React.FC<ParticipantsPanelProps> = ({
         <div className="text-sm text-white/70">
           <p>Meeting: {roomName}</p>
           {isHost && (
-            <p className="text-amber-400 mt-1">You are the host</p>
+            <div className="flex items-center mt-1 text-amber-400">
+              <Crown className="w-3 h-3 mr-1" />
+              <span>You are the host</span>
+            </div>
           )}
         </div>
       </div>

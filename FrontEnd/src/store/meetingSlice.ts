@@ -1232,11 +1232,10 @@
 
 
 
-
 import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit';
 import { toast } from "@/hooks/use-toast";
 import { requestMediaPermissions, cleanupMedia } from './mediaSlice';
-import { meetingApi, MeetingRoom } from '@/services/meetingApi';
+import { meetingApi, MeetingRoom, JoinMeetingResponse } from '@/services/meetingApi';
 import { realTimeService } from '@/services/realTimeService';
 
 export interface Participant {
@@ -1304,8 +1303,8 @@ export const joinMeeting = createAsyncThunk(
       const state = getState() as { media: { video: boolean, audio: boolean } };
       const { video, audio } = state.media;
       
-      // Join the meeting
-      const joinResult = await meetingApi.joinMeeting({
+      // Join the meeting - UPDATED to properly extract isHost from response
+      const joinResult: JoinMeetingResponse = await meetingApi.joinMeeting({
         meetingId,
         participantName: displayName,
         password: password
@@ -1314,8 +1313,18 @@ export const joinMeeting = createAsyncThunk(
       if (!joinResult.success) {
         throw new Error("Failed to join meeting");
       }
+
+      // CRITICAL: Extract isHost from the join response, not from meetingRoom comparison
+      const isHostFromApi = joinResult.isHost || false;
       
-      // Create local participant
+      console.log('🔑 Host status determination:', {
+        fromApi: isHostFromApi,
+        participantName: displayName,
+        hostName: meetingRoom.hostName,
+        participantId: joinResult.participantId
+      });
+      
+      // Create local participant with proper host status
       const localParticipant: Participant = {
         id: joinResult.participantId || "local_" + Date.now(),
         name: displayName,
@@ -1326,7 +1335,7 @@ export const joinMeeting = createAsyncThunk(
         isLocal: true,
         stream,
         joinedAt: new Date().toISOString(),
-        isHost: meetingRoom.hostName === displayName,
+        isHost: isHostFromApi, // Use the backend-provided host status
         hasStream: !!stream
       };
       
@@ -1342,8 +1351,8 @@ export const joinMeeting = createAsyncThunk(
       dispatch(setConnectionStatus('connected'));
       
       toast({
-        title: "Joined meeting",
-        description: `Successfully joined "${meetingRoom.name}"`,
+        title: isHostFromApi ? "Joined as host" : "Joined meeting",
+        description: `Successfully joined "${meetingRoom.name}"${isHostFromApi ? " as the meeting host" : ""}`,
       });
       
       return { 
@@ -1352,7 +1361,7 @@ export const joinMeeting = createAsyncThunk(
         localParticipant, 
         meetingRoom,
         participantId: joinResult.participantId || localParticipant.id,
-        isHost: meetingRoom.hostName === displayName
+        isHost: isHostFromApi // CRITICAL: Use backend-provided host status
       };
     } catch (error) {
       console.error("Error joining meeting:", error);
@@ -1395,6 +1404,50 @@ export const leaveMeeting = createAsyncThunk(
       console.error("Error leaving meeting:", error);
       await dispatch(cleanupMedia());
       return null;
+    }
+  }
+);
+
+export const endMeeting = createAsyncThunk(
+  'meeting/endMeeting',
+  async (_, { dispatch, getState, rejectWithValue }) => {
+    const state = getState() as { meeting: MeetingState };
+    const { roomName, isHost } = state.meeting;
+    
+    if (!isHost) {
+      toast({
+        title: "Access denied",
+        description: "Only the meeting host can end the meeting",
+        variant: "destructive",
+      });
+      return rejectWithValue("Only the host can end the meeting");
+    }
+    
+    try {
+      if (roomName) {
+        await meetingApi.endMeeting(roomName);
+      }
+      
+      await dispatch(cleanupMedia());
+      realTimeService.disconnect();
+      
+      toast({
+        title: "Meeting ended",
+        description: "The meeting has been ended by the host",
+      });
+      
+      return null;
+    } catch (error) {
+      console.error("Error ending meeting:", error);
+      const errorMsg = error instanceof Error ? error.message : "Failed to end meeting";
+      
+      toast({
+        title: "Failed to end meeting",
+        description: errorMsg,
+        variant: "destructive",
+      });
+      
+      return rejectWithValue(errorMsg);
     }
   }
 );
@@ -1447,11 +1500,58 @@ export const fetchParticipants = createAsyncThunk(
         ...p,
         isLocal: false,
         isSpeaking: false,
-        hasStream: false
+        hasStream: false,
+        isHost: p.isHost || p.is_host || false // Handle both camelCase and snake_case
       }));
     } catch (error) {
       console.error("Error fetching participants:", error);
       return rejectWithValue(error instanceof Error ? error.message : "Failed to fetch participants");
+    }
+  }
+);
+
+export const kickParticipantAction = createAsyncThunk(
+  'meeting/kickParticipant',
+  async (participantId: string, { dispatch, getState, rejectWithValue }) => {
+    const state = getState() as { meeting: MeetingState };
+    const { isHost, roomName } = state.meeting;
+    
+    if (!isHost) {
+      toast({
+        title: "Access denied",
+        description: "Only the meeting host can kick participants",
+        variant: "destructive",
+      });
+      return rejectWithValue("Only the host can kick participants");
+    }
+    
+    try {
+      if (roomName) {
+        // Send kick signal via real-time service
+        await realTimeService.send({
+          type: 'kick_participant',
+          meetingId: roomName,
+          participantId
+        });
+      }
+      
+      toast({
+        title: "Participant removed",
+        description: "Participant has been removed from the meeting",
+      });
+      
+      return participantId;
+    } catch (error) {
+      console.error("Error kicking participant:", error);
+      const errorMsg = error instanceof Error ? error.message : "Failed to kick participant";
+      
+      toast({
+        title: "Failed to remove participant",
+        description: errorMsg,
+        variant: "destructive",
+      });
+      
+      return rejectWithValue(errorMsg);
     }
   }
 );
@@ -1481,11 +1581,17 @@ const meetingSlice = createSlice({
         };
       }
     },
-    kickParticipant: (state, action: PayloadAction<string>) => {
+    removeParticipant: (state, action: PayloadAction<string>) => {
       state.participants = state.participants.filter(p => p.id !== action.payload);
     },
     setConnectionStatus: (state, action: PayloadAction<MeetingState['connectionStatus']>) => {
       state.connectionStatus = action.payload;
+    },
+    setGridView: (state, action: PayloadAction<boolean>) => {
+      state.isGridView = action.payload;
+    },
+    setChatOpen: (state, action: PayloadAction<boolean>) => {
+      state.isChatOpen = action.payload;
     },
     handleParticipantUpdate: (state, action: PayloadAction<any>) => {
       const { type, participantId, data } = action.payload;
@@ -1502,8 +1608,8 @@ const meetingSlice = createSlice({
               isSpeaking: false,
               isScreenSharing: false,
               isLocal: false,
-              joinedAt: new Date().toISOString(),
-              isHost: data?.isHost || false,
+              joinedAt: data?.joinedAt || new Date().toISOString(),
+              isHost: data?.isHost || false, // Handle host status from real-time updates
               hasStream: false
             });
           }
@@ -1511,7 +1617,37 @@ const meetingSlice = createSlice({
         case 'participant_left':
           state.participants = state.participants.filter(p => p.id !== participantId);
           break;
+        case 'participant_kicked':
+          state.participants = state.participants.filter(p => p.id !== participantId);
+          // Show notification if current user was kicked
+          if (participantId === state.participantId) {
+            state.isMeetingJoined = false;
+            state.connectionStatus = 'disconnected';
+          }
+          break;
+        case 'host_changed':
+          // Update host status for participants
+          state.participants.forEach(participant => {
+            participant.isHost = participant.id === data?.newHostId;
+          });
+          // Update local host status if current user is the new host
+          if (data?.newHostId === state.participantId) {
+            state.isHost = true;
+          }
+          break;
       }
+    },
+    // Action to handle meeting ended by host
+    handleMeetingEnded: (state) => {
+      state.isMeetingJoined = false;
+      state.participants = [];
+      state.roomName = "";
+      state.displayName = "";
+      state.isScreenSharing = false;
+      state.meetingRoom = null;
+      state.participantId = null;
+      state.isHost = false;
+      state.connectionStatus = 'disconnected';
     },
   },
   extraReducers: (builder) => {
@@ -1523,6 +1659,14 @@ const meetingSlice = createSlice({
       })
       .addCase(joinMeeting.fulfilled, (state, action) => {
         const { roomName, displayName, localParticipant, meetingRoom, participantId, isHost } = action.payload;
+        
+        console.log('🎯 Meeting join fulfilled with host status:', {
+          participantId,
+          isHost,
+          participantName: displayName,
+          hostName: meetingRoom.hostName
+        });
+        
         state.loading = false;
         state.roomName = roomName;
         state.displayName = displayName;
@@ -1531,7 +1675,7 @@ const meetingSlice = createSlice({
         state.joiningError = null;
         state.meetingRoom = meetingRoom;
         state.participantId = participantId;
-        state.isHost = isHost;
+        state.isHost = isHost; // CRITICAL: Use the backend-provided host status
         state.connectionStatus = 'connected';
       })
       .addCase(joinMeeting.rejected, (state, action) => {
@@ -1551,6 +1695,28 @@ const meetingSlice = createSlice({
         state.participantId = null;
         state.isHost = false;
         state.connectionStatus = 'disconnected';
+      })
+      .addCase(endMeeting.pending, (state) => {
+        state.loading = true;
+      })
+      .addCase(endMeeting.fulfilled, (state) => {
+        state.loading = false;
+        state.isMeetingJoined = false;
+        state.participants = [];
+        state.roomName = "";
+        state.displayName = "";
+        state.isScreenSharing = false;
+        state.meetingRoom = null;
+        state.participantId = null;
+        state.isHost = false;
+        state.connectionStatus = 'disconnected';
+      })
+      .addCase(endMeeting.rejected, (state) => {
+        state.loading = false;
+      })
+      .addCase(kickParticipantAction.fulfilled, (state, action) => {
+        const kickedParticipantId = action.payload;
+        state.participants = state.participants.filter(p => p.id !== kickedParticipantId);
       })
       .addCase(toggleScreenShare.fulfilled, (state, action) => {
         const { isScreenSharing } = action.payload;
@@ -1579,9 +1745,12 @@ const meetingSlice = createSlice({
 export const { 
   updateParticipant, 
   addParticipant,
-  kickParticipant,
+  removeParticipant,
   setConnectionStatus,
-  handleParticipantUpdate
+  setGridView,
+  setChatOpen,
+  handleParticipantUpdate,
+  handleMeetingEnded
 } = meetingSlice.actions;
 
 export default meetingSlice.reducer;
