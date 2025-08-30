@@ -1,19 +1,21 @@
-
-// middleware/authMiddleware.js
 const jwt = require('jsonwebtoken');
 const db = require('../config/database');
+const { decrypt } = require('../utils/encryption');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'demo_secret';
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'demo_refresh_secret';
-const { encrypt, decrypt } = require('../utils/encryption');
 
+// Required authentication middleware - for protected routes only
 const authMiddleware = async (req, res, next) => {
   try {
     const { accessToken, refreshToken } = req.cookies;
 
     // Check if any token exists
     if (!accessToken && !refreshToken) {
-      return res.status(401).json({ error: 'No authentication tokens provided' });
+      return res.status(401).json({ 
+        success: false,
+        error: 'Authentication required. Please log in to create meetings.' 
+      });
     }
 
     // Try access token first
@@ -23,13 +25,15 @@ const authMiddleware = async (req, res, next) => {
         const decoded = jwt.verify(decryptedAccessToken, JWT_SECRET);
 
         if (decoded.type !== 'access') {
-          return res.status(401).json({ error: 'Invalid token type' });
+          return res.status(401).json({ 
+            success: false,
+            error: 'Invalid token type' 
+          });
         }
 
         req.user = decoded;
-        return next(); // ✅ Access token is valid, continue
+        return next();
       } catch (error) {
-        // Access token expired/invalid, try refresh token
         console.log('Access token expired, attempting refresh...');
       }
     }
@@ -41,7 +45,10 @@ const authMiddleware = async (req, res, next) => {
         const refreshDecoded = jwt.verify(decryptedRefreshToken, JWT_REFRESH_SECRET);
 
         if (refreshDecoded.type !== 'refresh') {
-          return res.status(401).json({ error: 'Invalid refresh token type' });
+          return res.status(401).json({ 
+            success: false,
+            error: 'Invalid refresh token type' 
+          });
         }
 
         // Verify user still exists in database
@@ -49,7 +56,10 @@ const authMiddleware = async (req, res, next) => {
         const user = result.rows[0];
 
         if (!user) {
-          return res.status(401).json({ error: 'User not found' });
+          return res.status(401).json({ 
+            success: false,
+            error: 'User not found' 
+          });
         }
 
         // Generate NEW access token
@@ -57,13 +67,13 @@ const authMiddleware = async (req, res, next) => {
           {
             userId: user.id,
             email: user.email,
-            type: 'access',
-            roles: user.roles || ['end_user']
+            type: 'access'
           },
           JWT_SECRET,
           { expiresIn: '15m', algorithm: 'HS512' }
         );
         
+        const { encrypt } = require('../utils/encryption');
         const encryptedAccessToken = encrypt(newAccessToken);
         
         // Set new access token cookie
@@ -71,29 +81,35 @@ const authMiddleware = async (req, res, next) => {
           httpOnly: true,
           secure: process.env.NODE_ENV === 'production',
           sameSite: 'strict',
-          maxAge: 15 * 60 * 1000 // 15 minutes
+          maxAge: 15 * 60 * 1000
         });
 
-        // Set user data for the request
         req.user = {
           userId: user.id,
           email: user.email,
-          type: 'access',
-          roles: user.roles || ['end_user']
+          type: 'access'
         };
 
-        console.log(`Token refreshed for user: ${user.email}`);
-        return next(); // ✅ New token generated, continue
+        return next();
       } catch (refreshError) {
         console.error('Refresh token error:', refreshError);
-        return res.status(401).json({ error: 'Invalid refresh token' });
+        return res.status(401).json({ 
+          success: false,
+          error: 'Session expired. Please log in again.' 
+        });
       }
     }
 
-    return res.status(401).json({ error: 'Authentication failed' });
+    return res.status(401).json({ 
+      success: false,
+      error: 'Authentication failed' 
+    });
   } catch (error) {
     console.error('Authentication error:', error);
-    return res.status(401).json({ error: 'Authentication failed' });
+    return res.status(401).json({ 
+      success: false,
+      error: 'Authentication failed' 
+    });
   }
 };
 
