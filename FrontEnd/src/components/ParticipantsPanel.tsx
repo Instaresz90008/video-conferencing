@@ -38,27 +38,42 @@ const ParticipantsPanel: React.FC<ParticipantsPanelProps> = ({
           case 'participant_joined':
             console.log('➕ Participant joined:', data.signal.participantId);
             
+            // Skip if this is our own participant ID to prevent self-duplication
+            if (data.signal.participantId === participantId) {
+              console.log('🚫 Skipping self-participant event');
+              break;
+            }
+            
             // Check if participant already exists
             const existingParticipant = participants.find(p => p.id === data.signal.participantId);
             
             if (!existingParticipant) {
+              // Only add if we have a proper name or it's a different participant
+              const participantName = data.signal.participantName || data.signal.name;
+              
+              // Skip if no proper name is provided (likely a phantom/duplicate event)
+              if (!participantName || participantName === data.signal.participantId) {
+                console.log('🚫 Skipping participant with no proper name:', data.signal);
+                break;
+              }
+              
               // Add new participant to Redux state
               dispatch(addParticipant({
                 id: data.signal.participantId,
-                name: data.signal.participantId, // Use ID as name initially
-                isVideo: false,
-                isAudio: false,
+                name: participantName,
+                isVideo: data.signal.isVideo || false,
+                isAudio: data.signal.isAudio || false,
                 isSpeaking: false,
                 isScreenSharing: false,
-                isHost: false,
-                isLocal: data.signal.participantId === participantId,
+                isHost: data.signal.isHost || false,
+                isLocal: false, // This is definitely not local since we filtered out self above
                 joinedAt: new Date().toISOString(),
                 hasStream: false
               }));
               
               toast({
                 title: "Participant joined",
-                description: `${data.signal.participantId} joined the meeting`,
+                description: `${participantName} joined the meeting`,
                 open: true,
               });
             }
@@ -160,6 +175,10 @@ const ParticipantsPanel: React.FC<ParticipantsPanelProps> = ({
             // Fix host detection - use isHost property from participant or meeting state
             const isParticipantHost = participant.isHost || (isHost && participant.isLocal);
             
+            // Safe name handling with fallbacks
+            const displayName = participant.name || participant.id || 'Unknown User';
+            const avatarLetter = displayName.charAt(0).toUpperCase();
+            
             return (
               <div 
                 key={participant.id}
@@ -168,7 +187,7 @@ const ParticipantsPanel: React.FC<ParticipantsPanelProps> = ({
                 <div className="flex items-center space-x-3">
                   <div className="relative">
                     <div className="w-10 h-10 rounded-full bg-brand-blue flex items-center justify-center text-white font-medium">
-                      {participant.name.charAt(0).toUpperCase()}
+                      {avatarLetter}
                     </div>
                     {isParticipantHost && (
                       <div className="absolute -top-1 -right-1 bg-amber-500 rounded-full p-0.5">
@@ -179,7 +198,7 @@ const ParticipantsPanel: React.FC<ParticipantsPanelProps> = ({
                   
                   <div>
                     <div className="flex items-center">
-                      <span className="font-medium">{participant.name}</span>
+                      <span className="font-medium">{displayName}</span>
                       {participant.isLocal && (
                         <span className="ml-2 text-xs bg-white/20 py-0.5 px-2 rounded-full">
                           You
@@ -228,7 +247,7 @@ const ParticipantsPanel: React.FC<ParticipantsPanelProps> = ({
                     <DropdownMenuContent align="end" className="bg-black/80 text-white border-white/10">
                       <DropdownMenuItem 
                         className="text-red-400 focus:text-red-400 cursor-pointer hover:bg-red-500/20"
-                        onClick={() => handleKickParticipant(participant.id, participant.name)}
+                        onClick={() => handleKickParticipant(participant.id, displayName)}
                       >
                         <UserMinus className="mr-2 h-4 w-4" />
                         <span>Remove from meeting</span>
