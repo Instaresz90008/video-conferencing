@@ -1,4 +1,3 @@
-
 import { useCallback } from 'react';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import { 
@@ -67,11 +66,11 @@ export const useIntegratedMeeting = () => {
   });
 
   // Meeting controls
-  const handleJoinMeeting = useCallback(async (displayName: string, roomName: string) => {
-    if (!displayName?.trim() || !roomName?.trim()) {
+  const handleJoinMeeting = useCallback(async (displayName: string, meetingId: string, password?: string) => {
+    if (!displayName?.trim() || !meetingId?.trim()) {
       toast({
         title: "Invalid input",
-        description: "Display name and room name are required",
+        description: "Display name and meeting ID are required",
         variant: "destructive",
       });
       return;
@@ -79,21 +78,28 @@ export const useIntegratedMeeting = () => {
 
     try {
       await webRTCService.initializeMedia();
-      await dispatch(joinMeeting({ displayName, roomName })).unwrap();
-      await webRTCService.joinMeeting(roomName, displayName);
+      
+      // Use the correct parameter structure that matches the updated meetingSlice
+      await dispatch(joinMeeting({ 
+        displayName, 
+        meetingId,  // Changed from roomName to meetingId
+        password 
+      })).unwrap();
+      
+      await webRTCService.joinMeeting(meetingId, displayName);
       
       dispatch(markMessagesAsRead());
       
       toast({
         title: "Meeting joined",
-        description: `Connected to ${roomName}`,
+        description: `Connected to meeting`,
       });
     } catch (error) {
       console.error('Failed to join meeting:', error);
       
       offlineService.addOfflineAction('join_meeting', {
         displayName,
-        roomName,
+        meetingId,  // Changed from roomName to meetingId
         timestamp: Date.now()
       });
       

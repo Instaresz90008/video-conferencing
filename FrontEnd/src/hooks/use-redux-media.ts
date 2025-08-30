@@ -1,44 +1,82 @@
-
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 import {
   requestMediaPermissions,
   toggleVideoThunk,
   toggleAudioThunk,
-  cleanupMedia
+  cleanupMedia,
+  resetError
 } from '@/store/mediaSlice';
 
 export function useReduxMedia() {
   const dispatch = useAppDispatch();
-  const { stream, video, audio, loading, error } = useAppSelector(state => state.media);
-  const [initialized, setInitialized] = useState(false);
+  const { stream, video, audio, loading, error, initialized } = useAppSelector(state => state.media);
 
-  // Request media permissions when the hook is initialized
+  // Request media permissions when the hook is first used
   useEffect(() => {
-    // Only request media permissions once
-    if (!initialized) {
-      dispatch(requestMediaPermissions()).then(() => {
-        setInitialized(true);
-      });
+    // Only request media permissions if not already initialized and not currently loading
+    if (!initialized && !loading && !stream) {
+      console.log('Requesting media permissions...');
+      dispatch(requestMediaPermissions());
     }
-    
+  }, [dispatch, initialized, loading, stream]);
+
+  // Cleanup media when component unmounts
+  useEffect(() => {
     return () => {
-      dispatch(cleanupMedia());
+      if (stream) {
+        dispatch(cleanupMedia());
+      }
     };
-  }, [dispatch, initialized]);
+  }, [dispatch, stream]);
 
   const toggleVideo = () => {
-    dispatch(toggleVideoThunk());
+    if (!loading) {
+      dispatch(toggleVideoThunk());
+    }
   };
 
   const toggleAudio = () => {
-    dispatch(toggleAudioThunk());
+    if (!loading) {
+      dispatch(toggleAudioThunk());
+    }
   };
 
-  // Force request permissions if not initialized and no stream
+  // Force request permissions (useful for retry scenarios)
   const forceRequestPermissions = () => {
     return dispatch(requestMediaPermissions());
   };
+
+  // Clear any media errors
+  const clearError = () => {
+    dispatch(resetError());
+  };
+
+  // Check if we have the required media tracks
+  const hasVideoTrack = stream?.getVideoTracks().length > 0;
+  const hasAudioTrack = stream?.getAudioTracks().length > 0;
+
+  // Debug information
+  const debugInfo = {
+    hasStream: !!stream,
+    hasVideoTrack,
+    hasAudioTrack,
+    videoEnabled: video,
+    audioEnabled: audio,
+    initialized,
+    loading,
+    error,
+    streamId: stream?.id || null,
+    trackCount: stream?.getTracks().length || 0
+  };
+
+  // Log debug info when there are issues
+  useEffect(() => {
+    if (initialized && (video || audio) && !stream) {
+      console.warn('Media hook debug info:', debugInfo);
+      console.warn('Expected stream but got null. Check media permissions and browser settings.');
+    }
+  }, [initialized, video, audio, stream]);
 
   return {
     stream,
@@ -47,9 +85,13 @@ export function useReduxMedia() {
     loading,
     error,
     initialized,
+    hasVideoTrack,
+    hasAudioTrack,
     toggleVideo,
     toggleAudio,
     requestMediaPermissions: forceRequestPermissions,
-    cleanup: () => dispatch(cleanupMedia())
+    clearError,
+    cleanup: () => dispatch(cleanupMedia()),
+    debugInfo // Useful for troubleshooting
   };
 }

@@ -32,7 +32,7 @@ const Index = () => {
   const { meetingId } = useParams<{ meetingId?: string }>();
   const navigate = useNavigate();
   const hasAutoJoined = useRef(false);
-  
+
   const {
     meeting,
     media,
@@ -58,10 +58,10 @@ const Index = () => {
   // Handle joining from meeting link
   const handleJoinFromLink = (participantName: string) => {
     if (meetingData) {
-      handleJoinMeeting(participantName, meetingData.name);
+      handleJoinMeeting(participantName, meetingData.id); // CORRECT - using id
       toast({
         title: "Joined meeting",
-        description: `Welcome to ${meetingData.name}`,
+        description: `Welcome to ${meetingData.name}`, // Display name is fine for toast
       });
     }
   };
@@ -82,7 +82,7 @@ const Index = () => {
         backgroundPosition: 'center',
       };
     }
-    
+
     return {
       backgroundColor: 'hsl(var(--background))',
       backgroundImage: 'linear-gradient(135deg, hsl(var(--primary) / 0.05) 0%, hsl(var(--secondary) / 0.05) 100%)',
@@ -124,19 +124,19 @@ const Index = () => {
     // Show join screen if not in meeting yet
     if (!meeting.isMeetingJoined) {
       return (
-        <div 
+        <div
           className="min-h-screen flex flex-col text-foreground relative overflow-hidden"
           style={getBackgroundStyle()}
         >
           <div className="absolute top-4 right-4 z-30">
             <ThemeToggle />
           </div>
-          
-          <MeetingJoinScreen 
+
+          <MeetingJoinScreen
             meeting={meetingData}
             onJoinMeeting={handleJoinFromLink}
           />
-          
+
           <BackgroundElements />
         </div>
       );
@@ -144,7 +144,7 @@ const Index = () => {
 
     // Render active meeting interface with proper theming
     return (
-      <div 
+      <div
         className="min-h-screen flex flex-col text-foreground relative overflow-hidden"
         style={getBackgroundStyle()}
       >
@@ -152,7 +152,7 @@ const Index = () => {
         <div className="absolute top-4 right-4 z-30">
           <ThemeToggle />
         </div>
-        
+
         {/* AI features toolbar */}
         <AIToolbar
           onToggleMoM={() => togglePanel('isMomOpen')}
@@ -160,41 +160,41 @@ const Index = () => {
           onToggleTimeline={() => togglePanel('isTimelineOpen')}
           onToggleActionItems={() => togglePanel('isActionItemsOpen')}
         />
-        
+
         {/* Main meeting content */}
         <div className="flex-1 flex flex-col relative">
           {/* Video grid */}
           <div className="absolute inset-0">
-            <VideoGrid 
-              layout={ui.videoLayout as 'grid' | 'speaker' | 'pip' | 'pbp' | 'list'} 
+            <VideoGrid
+              layout={ui.videoLayout as 'grid' | 'speaker' | 'pip' | 'pbp' | 'list'}
               background={ui.backgroundImage}
               onLayoutChange={handleLayoutChange}
             />
           </div>
-          
+
           {/* Recording controls */}
-          <RecordingControls 
+          <RecordingControls
             isRecording={ui.isRecording}
             onToggleRecording={handleToggleRecording}
           />
-          
+
           {/* Emoji reactions */}
           <EmojiReactions
             onEmojiClick={handleEmojiClick}
             onRaiseHand={handleRaiseHand}
             handRaised={ui.handRaised}
           />
-          
+
           {/* Meeting indicators */}
-          <MeetingIndicators 
+          <MeetingIndicators
             handRaised={ui.handRaised}
             isRecording={ui.isRecording}
-            participantCount={meeting.participants?.length || 0} 
+            participantCount={meeting.participants?.length || 0}
           />
-          
+
           {/* Control bar */}
           <div className="absolute bottom-0 left-0 right-0 z-50">
-            <ControlBar 
+            <ControlBar
               onToggleChat={toggleChat}
               isChatOpen={chat.isOpen}
               onToggleParticipants={() => togglePanel('isParticipantsPanelOpen')}
@@ -205,75 +205,75 @@ const Index = () => {
               onToggleAdvancedControls={() => togglePanel('isAdvancedControlsOpen')}
             />
           </div>
-          
+
           {/* Chat panel */}
-          <EnhancedChatPanel 
-            isOpen={chat.isOpen} 
+          <EnhancedChatPanel
+            isOpen={chat.isOpen}
             onClose={toggleChat}
             isFullScreen={chat.isFullScreen}
             onToggleFullScreen={() => togglePanel('isFullScreen' as any)}
             onSendMessage={handleSendMessage}
             unreadCount={chat.unreadCount}
           />
-          
+
           {/* Side panels */}
-          <ParticipantsPanel 
-            isOpen={ui.isParticipantsPanelOpen} 
-            onClose={() => togglePanel('isParticipantsPanelOpen')} 
+          <ParticipantsPanel
+            isOpen={ui.isParticipantsPanelOpen}
+            onClose={() => togglePanel('isParticipantsPanelOpen')}
           />
-          
-          <BackgroundSelector 
+
+          <BackgroundSelector
             isOpen={ui.isBackgroundSelectorOpen}
             onClose={() => togglePanel('isBackgroundSelectorOpen')}
             onSelectBackground={handleBackgroundChange}
           />
 
-          <MeetingAgenda 
+          <MeetingAgenda
             isOpen={ui.isAgendaOpen}
             onClose={() => togglePanel('isAgendaOpen')}
           />
-          
-          <BreakoutRooms 
+
+          <BreakoutRooms
             isOpen={ui.isBreakoutRoomsOpen}
             onClose={() => togglePanel('isBreakoutRoomsOpen')}
           />
-          
-          <AdvancedControls 
+
+          <AdvancedControls
             isOpen={ui.isAdvancedControlsOpen}
             onClose={() => togglePanel('isAdvancedControlsOpen')}
           />
 
           {/* AI Components */}
-          <MoM 
-            isOpen={ui.isMomOpen} 
-            onClose={() => togglePanel('isMomOpen')} 
+          <MoM
+            isOpen={ui.isMomOpen}
+            onClose={() => togglePanel('isMomOpen')}
           />
-          
-          <SentimentAnalysis 
-            isOpen={ui.isSentimentOpen} 
-            onClose={() => togglePanel('isSentimentOpen')} 
+
+          <SentimentAnalysis
+            isOpen={ui.isSentimentOpen}
+            onClose={() => togglePanel('isSentimentOpen')}
           />
-          
-          <MeetingTimeline 
-            isOpen={ui.isTimelineOpen} 
-            onClose={() => togglePanel('isTimelineOpen')} 
+
+          <MeetingTimeline
+            isOpen={ui.isTimelineOpen}
+            onClose={() => togglePanel('isTimelineOpen')}
           />
-          
-          <ActionItems 
-            isOpen={ui.isActionItemsOpen} 
-            onClose={() => togglePanel('isActionItemsOpen')} 
+
+          <ActionItems
+            isOpen={ui.isActionItemsOpen}
+            onClose={() => togglePanel('isActionItemsOpen')}
           />
-          
+
           {/* Emoji burst animation */}
           {ui.burstEmoji && (
-            <EmojiBurst 
+            <EmojiBurst
               key={`burst-${ui.burstEmoji.key}`}
-              emoji={ui.burstEmoji.emoji} 
+              emoji={ui.burstEmoji.emoji}
               position={{ x: 20, y: 70 }}
             />
           )}
         </div>
-        
+
         {/* Background decorative elements */}
         <BackgroundElements />
       </div>
@@ -282,14 +282,14 @@ const Index = () => {
 
   // Home page when no meeting ID is provided - redirect to new Home page
   return (
-    <div 
+    <div
       className="min-h-screen flex flex-col text-foreground relative overflow-hidden"
       style={getBackgroundStyle()}
     >
       <div className="absolute top-4 right-4 z-30">
         <ThemeToggle />
       </div>
-      
+
       <div className="flex-1 flex items-center justify-center p-4">
         <div className="max-w-4xl w-full text-center space-y-8">
           <div className="space-y-4">
@@ -300,7 +300,7 @@ const Index = () => {
               You're in the meeting interface. Ready to start or join a meeting?
             </p>
           </div>
-          
+
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mt-12">
             <Card className="hover:scale-105 transition-transform cursor-pointer" onClick={() => navigate('/dashboard')}>
               <CardContent className="p-6 text-center">
@@ -310,7 +310,7 @@ const Index = () => {
                 <ArrowRight className="w-4 h-4 mx-auto mt-4 text-primary" />
               </CardContent>
             </Card>
-            
+
             <Card className="hover:scale-105 transition-transform cursor-pointer" onClick={() => navigate('/participants')}>
               <CardContent className="p-6 text-center">
                 <Users className="w-12 h-12 mx-auto mb-4 text-primary" />
@@ -319,7 +319,7 @@ const Index = () => {
                 <ArrowRight className="w-4 h-4 mx-auto mt-4 text-primary" />
               </CardContent>
             </Card>
-            
+
             <Card className="hover:scale-105 transition-transform cursor-pointer" onClick={() => navigate('/chat')}>
               <CardContent className="p-6 text-center">
                 <MessageCircle className="w-12 h-12 mx-auto mb-4 text-primary" />
@@ -328,7 +328,7 @@ const Index = () => {
                 <ArrowRight className="w-4 h-4 mx-auto mt-4 text-primary" />
               </CardContent>
             </Card>
-            
+
             <Card className="hover:scale-105 transition-transform cursor-pointer" onClick={() => navigate('/')}>
               <CardContent className="p-6 text-center">
                 <Calendar className="w-12 h-12 mx-auto mb-4 text-primary" />
@@ -338,10 +338,10 @@ const Index = () => {
               </CardContent>
             </Card>
           </div>
-          
+
           <div className="pt-8">
-            <Button 
-              size="lg" 
+            <Button
+              size="lg"
               className="px-8 py-3 text-lg"
               onClick={() => navigate('/dashboard')}
             >
@@ -350,7 +350,7 @@ const Index = () => {
           </div>
         </div>
       </div>
-      
+
       <BackgroundElements />
     </div>
   );

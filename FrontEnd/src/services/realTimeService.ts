@@ -1,121 +1,218 @@
-export interface RealTimeConnection {
-  isConnected: boolean;
-  socket: WebSocket | null;
-  subscriptions: Map<string, Function[]>;
-  reconnectAttempts: number;
-  maxReconnectAttempts: number;
+// realTimeService.ts - Fixed version with Redux integration
+
+import { store } from '@/store/index'; // Import your Redux store
+import { handleParticipantUpdate, handleMeetingEvent } from '@/store/meetingSlice';
+
+interface RealTimeMessage {
+  type: string;
+  meetingId?: string;
+  participantId?: string;
+  signal?: any;
+  data?: any;
+  channel?: string;
+}
+
+interface SubscriptionCallback {
+  (data: any): void;
 }
 
 class RealTimeService {
-  private connection: RealTimeConnection = {
-    isConnected: false,
-    socket: null,
-    subscriptions: new Map(),
-    reconnectAttempts: 0,
-    maxReconnectAttempts: 5
-  };
-
-  private readonly reconnectInterval = 3000; // 3 seconds
-  private readonly maxReconnectInterval = 30000; // 30 seconds
+  private socket: WebSocket | null = null;
+  private subscriptions = new Map<string, Set<SubscriptionCallback>>();
+  private isConnected = false;
+  private connectionPromise: Promise<boolean> | null = null;
+  private reconnectAttempts = 0;
+  private maxReconnectAttempts = 5;
+  private reconnectDelay = 1000;
+  private messageQueue: RealTimeMessage[] = [];
+  private heartbeatInterval: NodeJS.Timeout | null = null;
 
   async connect(): Promise<boolean> {
-    try {
-      // Use environment variable for WebSocket URL
-      const wsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:4000';
-      this.connection.socket = new WebSocket(wsUrl);
-      
-      this.connection.socket.onopen = () => {
-        console.log('Connected to real-time server');
-        this.connection.isConnected = true;
-        this.connection.reconnectAttempts = 0;
-        this.authenticateConnection();
-      };
+    // Return existing connection promise if already connecting
+    if (this.connectionPromise) {
+      return this.connectionPromise;
+    }
 
-      this.connection.socket.onmessage = (event) => {
-        try {
-          this.handleMessage(JSON.parse(event.data));
-        } catch (error) {
-          console.error('Failed to parse WebSocket message:', error);
-        }
-      };
-
-      this.connection.socket.onerror = (error) => {
-        console.error('WebSocket error:', error);
-      };
-
-      this.connection.socket.onclose = (event) => {
-        console.log('Disconnected from real-time server', event.code, event.reason);
-        this.connection.isConnected = false;
-        this.attemptReconnect();
-      };
-
+    // Return true if already connected
+    if (this.isConnected && this.socket?.readyState === WebSocket.OPEN) {
       return true;
+    }
+
+    this.connectionPromise = this.performConnection();
+    return this.connectionPromise;
+  }
+
+  private async performConnection(): Promise<boolean> {
+    try {
+      const wsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:4000/ws';
+      
+      console.log(`Attempting to connect to WebSocket server at: ${wsUrl}`);
+      
+      this.socket = new WebSocket(wsUrl);
+
+      return new Promise((resolve) => {
+        if (!this.socket) {
+          resolve(false);
+          return;
+        }
+
+        // Connection timeout
+        const timeout = setTimeout(() => {
+          console.error('WebSocket connection timeout');
+          this.socket?.close();
+          resolve(false);
+        }, 10000);
+
+        // Connection successful
+        this.socket.onopen = () => {
+          clearTimeout(timeout);
+          console.log('WebSocket connected successfully');
+          this.isConnected = true;
+          this.reconnectAttempts = 0;
+          this.connectionPromise = null;
+          this.setupEventHandlers();
+          this.startHeartbeat();
+          this.processMessageQueue();
+          this.authenticateConnection();
+          resolve(true);
+        };
+
+        // Connection failed
+        this.socket.onerror = (error) => {
+          clearTimeout(timeout);
+          console.error('WebSocket connection failed:', error);
+          this.isConnected = false;
+          this.connectionPromise = null;
+          this.scheduleReconnect();
+          resolve(false);
+        };
+
+        // Connection closed
+        this.socket.onclose = (event) => {
+          clearTimeout(timeout);
+          console.log('WebSocket connection closed:', event.code, event.reason);
+          this.isConnected = false;
+          this.connectionPromise = null;
+          this.stopHeartbeat();
+          
+          if (event.code !== 1000) { // Not a normal closure
+            this.scheduleReconnect();
+          }
+          resolve(false);
+        };
+      });
     } catch (error) {
-      console.error('Failed to connect to real-time server:', error);
+      console.error('Failed to create WebSocket connection:', error);
+      this.connectionPromise = null;
       return false;
     }
   }
 
-  private async authenticateConnection() {
-    try {
-      // Cookie-based authentication - send auth request
-      // The backend will authenticate using httpOnly cookies
-      const authMessage = {
-        type: 'auth',
-        timestamp: Date.now()
-      };
-      
-      this.send(authMessage);
-    } catch (error) {
-      console.error('Failed to authenticate WebSocket connection:', error);
-    }
+  private setupEventHandlers() {
+    if (!this.socket) return;
+
+    this.socket.onmessage = (event) => {
+      try {
+        const message: RealTimeMessage = JSON.parse(event.data);
+        this.handleMessage(message);
+      } catch (error) {
+        console.error('Failed to parse WebSocket message:', error);
+      }
+    };
   }
 
-  private handleMessage(message: any) {
-    try {
-      const { type, channel, data, error } = message;
+  private handleMessage(message: RealTimeMessage) {
+    const { type, channel, data, error } = message;
+    
+    console.log('📨 WebSocket message received:', message);
+    
+    // Handle authentication response
+    if (type === 'auth_response') {
+      if (error) {
+        console.error('WebSocket authentication failed:', error);
+        this.disconnect();
+        return;
+      }
+      console.log('WebSocket authenticated successfully');
+      return;
+    }
+
+    // Handle subscription confirmations
+    if (type === 'subscription_confirmed') {
+      console.log(`Subscribed to channel: ${channel}`);
+      return;
+    }
+
+    // Handle pong responses
+    if (type === 'pong') {
+      return; // Heartbeat response
+    }
+
+    // CRITICAL FIX: Dispatch participant events to Redux store
+    if (type === 'participant_joined' || 
+        type === 'participant_left' || 
+        type === 'participant_updated') {
       
-      // Handle authentication response
-      if (type === 'auth_response') {
-        if (error) {
-          console.error('WebSocket authentication failed:', error);
-          this.disconnect();
-          return;
-        }
-        console.log('WebSocket authenticated successfully');
-        return;
-      }
+      console.log('🔄 Dispatching participant update to Redux:', message);
+      store.dispatch(handleParticipantUpdate(message));
+    }
+    
+    // Handle meeting events
+    if (type === 'meeting_ended' || 
+        type === 'participant_speaking' ||
+        type === 'screen_share_started' ||
+        type === 'screen_share_stopped') {
+      
+      console.log('📢 Dispatching meeting event to Redux:', message);
+      store.dispatch(handleMeetingEvent(message));
+    }
 
-      // Handle subscription confirmations
-      if (type === 'subscription_confirmed') {
-        console.log(`Subscribed to channel: ${channel}`);
-        return;
-      }
-
-      // Handle regular messages
-      if (channel) {
-        const subscribers = this.connection.subscriptions.get(channel) || [];
+    // Handle regular channel subscriptions (for backward compatibility)
+    if (channel) {
+      const subscribers = this.subscriptions.get(channel);
+      if (subscribers) {
         subscribers.forEach(callback => {
           try {
-            callback(data);
+            callback(data || message);
           } catch (error) {
             console.error('Error in subscription callback:', error);
           }
         });
       }
-    } catch (error) {
-      console.error('Error handling WebSocket message:', error);
     }
   }
 
-  subscribe(channel: string, callback: Function): () => void {
-    if (!this.connection.subscriptions.has(channel)) {
-      this.connection.subscriptions.set(channel, []);
+  private authenticateConnection() {
+    // Send authentication message using cookies
+    this.send({
+      type: 'auth',
+      timestamp: Date.now()
+    });
+  }
+
+  private startHeartbeat() {
+    this.heartbeatInterval = setInterval(() => {
+      if (this.isConnected) {
+        this.send({ type: 'ping' });
+      }
+    }, 30000); // Send ping every 30 seconds
+  }
+
+  private stopHeartbeat() {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
     }
-    this.connection.subscriptions.get(channel)!.push(callback);
+  }
+
+  subscribe(channel: string, callback: SubscriptionCallback): () => void {
+    if (!this.subscriptions.has(channel)) {
+      this.subscriptions.set(channel, new Set());
+    }
+    this.subscriptions.get(channel)!.add(callback);
 
     // Subscribe to channel if connected
-    if (this.connection.isConnected) {
+    if (this.isConnected) {
       this.send({
         type: 'subscribe',
         channel
@@ -126,35 +223,38 @@ class RealTimeService {
     return () => this.unsubscribe(channel, callback);
   }
 
-  unsubscribe(channel: string, callback?: Function) {
+  unsubscribe(channel: string, callback?: SubscriptionCallback) {
     if (callback) {
-      const subscribers = this.connection.subscriptions.get(channel) || [];
-      const index = subscribers.indexOf(callback);
-      if (index > -1) {
-        subscribers.splice(index, 1);
+      const subscribers = this.subscriptions.get(channel);
+      if (subscribers) {
+        subscribers.delete(callback);
         
         // If no more subscribers for this channel, unsubscribe from server
-        if (subscribers.length === 0) {
-          this.connection.subscriptions.delete(channel);
-          this.send({
-            type: 'unsubscribe',
-            channel
-          });
+        if (subscribers.size === 0) {
+          this.subscriptions.delete(channel);
+          if (this.isConnected) {
+            this.send({
+              type: 'unsubscribe',
+              channel
+            });
+          }
         }
       }
     } else {
-      this.connection.subscriptions.delete(channel);
-      this.send({
-        type: 'unsubscribe',
-        channel
-      });
+      this.subscriptions.delete(channel);
+      if (this.isConnected) {
+        this.send({
+          type: 'unsubscribe',
+          channel
+        });
+      }
     }
   }
 
-  send(message: any): boolean {
-    if (this.connection.isConnected && this.connection.socket) {
+  send(message: RealTimeMessage): boolean {
+    if (this.isConnected && this.socket?.readyState === WebSocket.OPEN) {
       try {
-        this.connection.socket.send(JSON.stringify(message));
+        this.socket.send(JSON.stringify(message));
         return true;
       } catch (error) {
         console.error('Failed to send WebSocket message:', error);
@@ -162,28 +262,41 @@ class RealTimeService {
       }
     }
     
-    console.warn('Cannot send message: WebSocket not connected');
+    // Queue message if not connected
+    this.messageQueue.push(message);
+    console.warn('Message queued - WebSocket not connected');
     return false;
   }
 
-  private attemptReconnect() {
-    if (this.connection.reconnectAttempts >= this.connection.maxReconnectAttempts) {
+  private processMessageQueue() {
+    while (this.messageQueue.length > 0 && this.isConnected) {
+      const message = this.messageQueue.shift();
+      if (message) {
+        this.send(message);
+      }
+    }
+  }
+
+  private scheduleReconnect() {
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       console.error('Max reconnection attempts reached');
       return;
     }
 
-    this.connection.reconnectAttempts++;
+    this.reconnectAttempts++;
     
     // Exponential backoff with jitter
     const delay = Math.min(
-      this.reconnectInterval * Math.pow(2, this.connection.reconnectAttempts - 1) + 
+      this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1) + 
       Math.random() * 1000,
-      this.maxReconnectInterval
+      30000
     );
 
+    console.log(`Scheduling reconnect in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+
     setTimeout(() => {
-      if (!this.connection.isConnected) {
-        console.log(`Attempting to reconnect (${this.connection.reconnectAttempts}/${this.connection.maxReconnectAttempts})...`);
+      if (!this.isConnected) {
+        console.log('Attempting to reconnect...');
         this.connect().then(connected => {
           if (connected) {
             // Resubscribe to all channels
@@ -196,7 +309,7 @@ class RealTimeService {
 
   private resubscribeToChannels() {
     // Resubscribe to all active channels after reconnection
-    for (const channel of this.connection.subscriptions.keys()) {
+    for (const channel of this.subscriptions.keys()) {
       this.send({
         type: 'subscribe',
         channel
@@ -205,36 +318,34 @@ class RealTimeService {
   }
 
   disconnect() {
-    if (this.connection.socket) {
-      this.connection.socket.close(1000, 'Client initiated disconnect');
-      this.connection.socket = null;
+    this.stopHeartbeat();
+    if (this.socket) {
+      this.socket.close(1000, 'Client initiated disconnect');
+      this.socket = null;
     }
-    this.connection.isConnected = false;
-    this.connection.subscriptions.clear();
-    this.connection.reconnectAttempts = 0;
+    this.isConnected = false;
+    this.subscriptions.clear();
+    this.reconnectAttempts = 0;
+    this.messageQueue = [];
   }
 
   // Utility methods
-  isConnected(): boolean {
-    return this.connection.isConnected;
+  getIsConnected(): boolean {
+    return this.isConnected;
   }
 
   getConnectionStatus(): {
     connected: boolean;
     reconnectAttempts: number;
     subscribedChannels: string[];
+    queuedMessages: number;
   } {
     return {
-      connected: this.connection.isConnected,
-      reconnectAttempts: this.connection.reconnectAttempts,
-      subscribedChannels: Array.from(this.connection.subscriptions.keys())
+      connected: this.isConnected,
+      reconnectAttempts: this.reconnectAttempts,
+      subscribedChannels: Array.from(this.subscriptions.keys()),
+      queuedMessages: this.messageQueue.length
     };
-  }
-
-  // Method to handle authentication errors and logout
-  handleAuthError() {
-    console.log('Authentication error detected, disconnecting WebSocket');
-    this.disconnect();
   }
 }
 

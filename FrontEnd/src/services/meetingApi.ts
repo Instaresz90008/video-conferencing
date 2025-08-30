@@ -1,4 +1,3 @@
-// import { DATABASE_CONFIG } from '@/config/database';
 // import { realTimeService } from '@/services/realTimeService';
 // import { localMeetingFallback } from '@/services/fallback/localMeeting';
 
@@ -31,8 +30,16 @@
 //   password?: string;
 // }
 
+// export interface ApiResponse<T> {
+//   success: boolean;
+//   message?: string;
+//   data?: T;
+//   error?: string;
+// }
+
 // class MeetingApiService {
-//   private baseUrl = `http://${DATABASE_CONFIG.host}:3000/api/meetings`;
+//   // Use consistent base URL for all API calls
+//   private baseUrl = `${import.meta.env.VITE_SERVER_URL || 'http://localhost:4000'}/api`;
 
 //   constructor() {
 //     // Connect to real-time service on initialization
@@ -46,21 +53,58 @@
 //     }
 //   }
 
+//   // Common fetch configuration for cookie authentication
+//   private getFetchConfig(method: string, body?: any): RequestInit {
+//     const config: RequestInit = {
+//       method,
+//       credentials: 'include', // Use cookies instead of localStorage
+//       headers: {
+//         'Content-Type': 'application/json',
+//         'Cache-Control': 'no-cache'
+//       }
+//     };
+
+//     if (body) {
+//       config.body = JSON.stringify(body);
+//     }
+
+//     return config;
+//   }
+
+//   private async handleApiResponse<T>(response: Response): Promise<T> {
+//     if (!response.ok) {
+//       let errorData;
+//       try {
+//         errorData = await response.json();
+//       } catch {
+//         errorData = { error: `HTTP ${response.status}: ${response.statusText}` };
+//       }
+//       throw new Error(errorData.error || 'API request failed');
+//     }
+
+//     const result = await response.json() as ApiResponse<T>;
+    
+//     if (result.success && result.data) {
+//       return result.data;
+//     }
+
+//     // Handle responses that don't follow the success/data pattern (for backward compatibility)
+//     return result as unknown as T;
+//   }
+
 //   async createMeeting(data: CreateMeetingRequest): Promise<MeetingRoom> {
 //     try {
-//       // Primary: PostgreSQL backend
-//       const response = await fetch(`${this.baseUrl}/create`, {
-//         method: 'POST',
-//         headers: {
-//           'Content-Type': 'application/json',
-//           'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-//         },
-//         body: JSON.stringify(data)
-//       });
+//       console.log('Creating meeting with data:', data);
+      
+//       // Primary: PostgreSQL backend with cookie auth
+//       const response = await fetch(
+//         `${this.baseUrl}/meetings/create`,
+//         this.getFetchConfig('POST', data)
+//       );
 
-//       if (!response.ok) throw new Error('Failed to create meeting');
+//       const meeting = await this.handleApiResponse<MeetingRoom>(response);
 
-//       const meeting = await response.json();
+//       console.log('Meeting created successfully:', meeting);
 
 //       // Subscribe to real-time updates
 //       realTimeService.subscribe(`meeting:${meeting.id}`, (update) => {
@@ -76,44 +120,63 @@
 
 //   async getMeeting(meetingId: string): Promise<MeetingRoom | null> {
 //     try {
-//       // Primary: PostgreSQL backend
-//       const response = await fetch(`${this.baseUrl}/${meetingId}`, {
-//         headers: {
-//           'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-//         }
-//       });
+//       // Validate and encode meeting ID properly
+//       if (!meetingId || typeof meetingId !== 'string') {
+//         throw new Error('Invalid meeting ID');
+//       }
 
-//       if (!response.ok) throw new Error('Meeting not found');
+//       // Ensure the meeting ID is properly encoded for URL
+//       const encodedMeetingId = encodeURIComponent(meetingId.trim());
+      
+//       console.log('Fetching meeting:', { original: meetingId, encoded: encodedMeetingId });
 
-//       return await response.json();
+//       const response = await fetch(
+//         `${this.baseUrl}/meetings/${encodedMeetingId}`,
+//         this.getFetchConfig('GET')
+//       );
+
+//       return await this.handleApiResponse<MeetingRoom>(response);
 //     } catch (error) {
 //       console.error('Primary meeting fetch failed, using fallback:', error);
 //       return localMeetingFallback.getMeeting(meetingId);
 //     }
 //   }
 
-//   async joinMeeting(data: JoinMeetingRequest): Promise<{ success: boolean; token?: string }> {
+//   async joinMeeting(data: JoinMeetingRequest): Promise<{ success: boolean; token?: string; participantId?: string }> {
 //     try {
-//       // Primary: PostgreSQL backend
-//       const response = await fetch(`${this.baseUrl}/${data.meetingId}/join`, {
-//         method: 'POST',
-//         headers: {
-//           'Content-Type': 'application/json',
-//           'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-//         },
-//         body: JSON.stringify(data)
+//       // Validate meeting ID
+//       if (!data.meetingId || typeof data.meetingId !== 'string') {
+//         throw new Error('Invalid meeting ID');
+//       }
+
+//       const encodedMeetingId = encodeURIComponent(data.meetingId.trim());
+      
+//       console.log('Joining meeting:', { 
+//         original: data.meetingId, 
+//         encoded: encodedMeetingId,
+//         participantName: data.participantName 
 //       });
 
-//       if (!response.ok) throw new Error('Failed to join meeting');
+//       const response = await fetch(
+//         `${this.baseUrl}/meetings/${encodedMeetingId}/join`,
+//         this.getFetchConfig('POST', { 
+//           participantName: data.participantName, 
+//           password: data.password 
+//         })
+//       );
 
-//       const result = await response.json();
+//       const result = await this.handleApiResponse<{ token: string; participantId: string }>(response);
 
 //       // Subscribe to meeting events
 //       realTimeService.subscribe(`meeting:${data.meetingId}:participants`, (update) => {
 //         console.log('Participant update:', update);
 //       });
 
-//       return result;
+//       return {
+//         success: true,
+//         token: result.token,
+//         participantId: result.participantId
+//       };
 //     } catch (error) {
 //       console.error('Primary meeting join failed, using fallback:', error);
 //       return localMeetingFallback.joinMeeting(data);
@@ -121,107 +184,53 @@
 //   }
 
 //   async leaveMeeting(meetingId: string, participantId: string): Promise<void> {
-//     console.log(`Participant ${participantId} left meeting ${meetingId}`);
+//     try {
+//       const encodedMeetingId = encodeURIComponent(meetingId.trim());
+      
+//       await fetch(
+//         `${this.baseUrl}/meetings/${encodedMeetingId}/leave`,
+//         this.getFetchConfig('POST', { participantId })
+//       );
+      
+//       console.log(`Participant ${participantId} left meeting ${meetingId}`);
+//     } catch (error) {
+//       console.error('Failed to leave meeting:', error);
+//     }
 //   }
 
 //   async endMeeting(meetingId: string): Promise<void> {
-//     if (this.mockMeetings.has(meetingId)) {
-//       const meeting = this.mockMeetings.get(meetingId)!;
-//       meeting.isActive = false;
-//       this.mockMeetings.set(meetingId, meeting);
+//     try {
+//       const encodedMeetingId = encodeURIComponent(meetingId.trim());
+      
+//       await fetch(
+//         `${this.baseUrl}/meetings/${encodedMeetingId}/end`,
+//         this.getFetchConfig('POST')
+//       );
+      
+//       console.log(`Meeting ${meetingId} ended`);
+//     } catch (error) {
+//       console.error('Failed to end meeting:', error);
 //     }
-//     console.log(`Meeting ${meetingId} ended`);
+//   }
+
+//   async getParticipants(meetingId: string): Promise<any[]> {
+//     try {
+//       const encodedMeetingId = encodeURIComponent(meetingId.trim());
+      
+//       const response = await fetch(
+//         `${this.baseUrl}/meetings/${encodedMeetingId}/participants`,
+//         this.getFetchConfig('GET')
+//       );
+
+//       return await this.handleApiResponse<any[]>(response);
+//     } catch (error) {
+//       console.error('Failed to get participants:', error);
+//       return [];
+//     }
 //   }
 
 //   generateMeetingLink(meetingId: string): string {
-//     return `${window.location.origin}/meeting/${meetingId}`;
-//   }
-
-//   // Get all demo meetings for testing
-//   getTestMeetings(): MeetingRoom[] {
-//     return Array.from(this.mockMeetings.values());
-//   }
-
-//   // For demo purposes - replace with actual API calls
-//   async mockCreateMeeting(data: CreateMeetingRequest): Promise<MeetingRoom> {
-//     const meetingId = this.generateMeetingId();
-//     const meeting: MeetingRoom = {
-//       id: meetingId,
-//       name: data.name,
-//       hostId: 'host_' + Date.now(),
-//       hostName: data.hostName,
-//       isPublic: data.isPublic,
-//       password: data.password,
-//       maxParticipants: data.maxParticipants || 50,
-//       createdAt: new Date().toISOString(),
-//       expiresAt: data.duration ? new Date(Date.now() + data.duration * 60000).toISOString() : undefined,
-//       isActive: true,
-//     };
-
-//     // Store in mock storage
-//     this.mockMeetings.set(meetingId, meeting);
-
-//     return meeting;
-//   }
-
-//   private generateMeetingId(): string {
-//     const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-//     const segments = [];
-
-//     for (let i = 0; i < 3; i++) {
-//       let segment = '';
-//       for (let j = 0; j < 3; j++) {
-//         segment += chars.charAt(Math.floor(Math.random() * chars.length));
-//       }
-//       segments.push(segment);
-//     }
-
-//     return segments.join('-');
-//   }
-
-//   private mockMeetings = new Map<string, MeetingRoom>();
-
-//   private initializeTestMeetings() {
-//     const testMeetings = [
-//       {
-//         id: 'test-123',
-//         name: 'Test Meeting Room',
-//         hostId: 'host_1',
-//         hostName: 'Demo Host',
-//         isPublic: true,
-//         maxParticipants: 10,
-//         createdAt: new Date().toISOString(),
-//         isActive: true,
-//       },
-//       {
-//         id: 'demo-456',
-//         name: 'Demo Conference Call',
-//         hostId: 'host_2',
-//         hostName: 'Conference Admin',
-//         isPublic: false,
-//         password: 'demo123',
-//         maxParticipants: 25,
-//         createdAt: new Date().toISOString(),
-//         isActive: true,
-//       },
-//       {
-//         id: 'team-789',
-//         name: 'Team Standup',
-//         hostId: 'host_3',
-//         hostName: 'Team Lead',
-//         isPublic: true,
-//         maxParticipants: 15,
-//         createdAt: new Date().toISOString(),
-//         expiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(), // 2 hours from now
-//         isActive: true,
-//       }
-//     ];
-
-//     testMeetings.forEach(meeting => {
-//       this.mockMeetings.set(meeting.id, meeting as MeetingRoom);
-//     });
-
-//     console.log('Demo meetings initialized:', Array.from(this.mockMeetings.values()));
+//     return `${window.location.origin}/meeting/${encodeURIComponent(meetingId)}`;
 //   }
 
 //   // WebRTC signaling methods
@@ -241,9 +250,72 @@
 //   subscribeToSignals(meetingId: string, callback: (signal: any) => void) {
 //     realTimeService.subscribe(`meeting:${meetingId}:webrtc`, callback);
 //   }
+
+//   // Authentication check method
+//   async checkAuth(): Promise<boolean> {
+//     try {
+//       const response = await fetch(
+//         `${this.baseUrl}/auth/check`,
+//         this.getFetchConfig('GET')
+//       );
+//       return response.ok;
+//     } catch (error) {
+//       console.error('Auth check failed:', error);
+//       return false;
+//     }
+//   }
+
+//   // Utility method to handle token refresh if needed
+//   async refreshAuthIfNeeded(): Promise<boolean> {
+//     try {
+//       const response = await fetch(
+//         `${this.baseUrl}/auth/refresh`,
+//         this.getFetchConfig('POST')
+//       );
+//       return response.ok;
+//     } catch (error) {
+//       console.error('Token refresh failed:', error);
+//       return false;
+//     }
+//   }
+
+//   // Helper method to validate meeting ID format
+//   isValidMeetingId(meetingId: string): boolean {
+//     // Meeting IDs should be in format: abc-def-ghi (3 segments of 3 chars each)
+//     const meetingIdPattern = /^[a-z0-9]{3}-[a-z0-9]{3}-[a-z0-9]{3}$/;
+//     return meetingIdPattern.test(meetingId);
+//   }
+
+//   // Helper method to extract meeting ID from various inputs
+//   extractMeetingId(input: string): string | null {
+//     // If it's already a valid meeting ID, return it
+//     if (this.isValidMeetingId(input)) {
+//       return input;
+//     }
+
+//     // Try to extract from URL if it's a meeting link
+//     try {
+//       const url = new URL(input);
+//       const pathParts = url.pathname.split('/');
+//       const lastPart = pathParts[pathParts.length - 1];
+//       if (this.isValidMeetingId(lastPart)) {
+//         return lastPart;
+//       }
+//     } catch {
+//       // Not a valid URL, continue
+//     }
+
+//     // If no valid ID found, return null
+//     return null;
+//   }
 // }
 
 // export const meetingApi = new MeetingApiService();
+
+
+
+
+
 
 
 
@@ -309,18 +381,52 @@ export interface ApiResponse<T> {
 }
 
 class MeetingApiService {
-  private baseUrl = `${import.meta.env.VITE_SERVER_URL}/api/meetings`;
+  private static instance: MeetingApiService;
+  private baseUrl = `${import.meta.env.VITE_SERVER_URL || 'http://localhost:4000'}/api`;
+  private realTimeConnectionPromise: Promise<boolean> | null = null;
+  private realTimeInitialized = false;
+  private connectionTimeout: NodeJS.Timeout | null = null;
 
-  constructor() {
-    // Connect to real-time service on initialization
-    this.initializeRealTime();
+  private constructor() {
+    // Don't initialize real-time in constructor to prevent connection churn
   }
 
-  private async initializeRealTime() {
-    const connected = await realTimeService.connect();
-    if (!connected) {
-      console.warn('Real-time connection failed, using local fallback');
+  static getInstance(): MeetingApiService {
+    if (!MeetingApiService.instance) {
+      MeetingApiService.instance = new MeetingApiService();
     }
+    return MeetingApiService.instance;
+  }
+
+  private async ensureRealTimeConnection(): Promise<boolean> {
+    if (this.realTimeInitialized) {
+      return true;
+    }
+
+    if (!this.realTimeConnectionPromise) {
+      // Debounce connection attempts to prevent rapid reconnections
+      this.realTimeConnectionPromise = new Promise((resolve) => {
+        if (this.connectionTimeout) {
+          clearTimeout(this.connectionTimeout);
+        }
+
+        this.connectionTimeout = setTimeout(async () => {
+          try {
+            const connected = await realTimeService.connect();
+            this.realTimeInitialized = connected;
+            if (!connected) {
+              console.warn('Real-time connection failed, using local fallback');
+            }
+            resolve(connected);
+          } catch (error) {
+            console.error('Real-time connection error:', error);
+            resolve(false);
+          }
+        }, 100); // 100ms debounce
+      });
+    }
+
+    return this.realTimeConnectionPromise;
   }
 
   // Common fetch configuration for cookie authentication
@@ -343,7 +449,12 @@ class MeetingApiService {
 
   private async handleApiResponse<T>(response: Response): Promise<T> {
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+      let errorData;
+      try {
+        errorData = await response.json();
+      } catch {
+        errorData = { error: `HTTP ${response.status}: ${response.statusText}` };
+      }
       throw new Error(errorData.error || 'API request failed');
     }
 
@@ -359,18 +470,36 @@ class MeetingApiService {
 
   async createMeeting(data: CreateMeetingRequest): Promise<MeetingRoom> {
     try {
+      console.log('Creating meeting with data:', data);
+      
+      // Ensure auth is valid before proceeding
+      const isAuthenticated = await this.checkAuth();
+      if (!isAuthenticated) {
+        const refreshed = await this.refreshAuthIfNeeded();
+        if (!refreshed) {
+          throw new Error('Authentication failed');
+        }
+      }
+
       // Primary: PostgreSQL backend with cookie auth
       const response = await fetch(
-        `${this.baseUrl}/create`, // Updated endpoint
+        `${this.baseUrl}/meetings/create`,
         this.getFetchConfig('POST', data)
       );
 
       const meeting = await this.handleApiResponse<MeetingRoom>(response);
 
-      // Subscribe to real-time updates
-      realTimeService.subscribe(`meeting:${meeting.id}`, (update) => {
-        console.log('Meeting update:', update);
-      });
+      console.log('Meeting created successfully:', meeting);
+
+      // Only initialize real-time after successful meeting creation
+      const realTimeConnected = await this.ensureRealTimeConnection();
+      
+      // Subscribe to real-time updates only if connection is available
+      if (realTimeConnected) {
+        realTimeService.subscribe(`meeting:${meeting.id}`, (update) => {
+          console.log('Meeting update:', update);
+        });
+      }
 
       return meeting;
     } catch (error) {
@@ -381,8 +510,19 @@ class MeetingApiService {
 
   async getMeeting(meetingId: string): Promise<MeetingRoom | null> {
     try {
+      // Always validate and extract proper meeting ID first
+      const validMeetingId = this.extractMeetingId(meetingId);
+      if (!validMeetingId) {
+        throw new Error(`Invalid meeting ID format: ${meetingId}`);
+      }
+
+      // Ensure the meeting ID is properly encoded for URL
+      const encodedMeetingId = encodeURIComponent(validMeetingId);
+      
+      console.log('Fetching meeting:', { original: meetingId, validated: validMeetingId, encoded: encodedMeetingId });
+
       const response = await fetch(
-        `${this.baseUrl}/${meetingId}`,
+        `${this.baseUrl}/meetings/${encodedMeetingId}`,
         this.getFetchConfig('GET')
       );
 
@@ -395,8 +535,23 @@ class MeetingApiService {
 
   async joinMeeting(data: JoinMeetingRequest): Promise<{ success: boolean; token?: string; participantId?: string }> {
     try {
+      // Validate and extract proper meeting ID
+      const validMeetingId = this.extractMeetingId(data.meetingId);
+      if (!validMeetingId) {
+        throw new Error(`Invalid meeting ID format: ${data.meetingId}`);
+      }
+
+      const encodedMeetingId = encodeURIComponent(validMeetingId);
+      
+      console.log('Joining meeting:', { 
+        original: data.meetingId, 
+        validated: validMeetingId,
+        encoded: encodedMeetingId,
+        participantName: data.participantName 
+      });
+
       const response = await fetch(
-        `${this.baseUrl}/${data.meetingId}/join`,
+        `${this.baseUrl}/meetings/${encodedMeetingId}/join`,
         this.getFetchConfig('POST', { 
           participantName: data.participantName, 
           password: data.password 
@@ -405,10 +560,15 @@ class MeetingApiService {
 
       const result = await this.handleApiResponse<{ token: string; participantId: string }>(response);
 
-      // Subscribe to meeting events
-      realTimeService.subscribe(`meeting:${data.meetingId}:participants`, (update) => {
-        console.log('Participant update:', update);
-      });
+      // Ensure real-time connection before subscribing
+      const realTimeConnected = await this.ensureRealTimeConnection();
+      
+      // Subscribe to meeting events only if real-time is available
+      if (realTimeConnected) {
+        realTimeService.subscribe(`meeting:${validMeetingId}:participants`, (update) => {
+          console.log('Participant update:', update);
+        });
+      }
 
       return {
         success: true,
@@ -423,12 +583,19 @@ class MeetingApiService {
 
   async leaveMeeting(meetingId: string, participantId: string): Promise<void> {
     try {
+      const validMeetingId = this.extractMeetingId(meetingId);
+      if (!validMeetingId) {
+        throw new Error(`Invalid meeting ID format: ${meetingId}`);
+      }
+
+      const encodedMeetingId = encodeURIComponent(validMeetingId);
+      
       await fetch(
-        `${this.baseUrl}/${meetingId}/leave`,
+        `${this.baseUrl}/meetings/${encodedMeetingId}/leave`,
         this.getFetchConfig('POST', { participantId })
       );
       
-      console.log(`Participant ${participantId} left meeting ${meetingId}`);
+      console.log(`Participant ${participantId} left meeting ${validMeetingId}`);
     } catch (error) {
       console.error('Failed to leave meeting:', error);
     }
@@ -436,12 +603,19 @@ class MeetingApiService {
 
   async endMeeting(meetingId: string): Promise<void> {
     try {
+      const validMeetingId = this.extractMeetingId(meetingId);
+      if (!validMeetingId) {
+        throw new Error(`Invalid meeting ID format: ${meetingId}`);
+      }
+
+      const encodedMeetingId = encodeURIComponent(validMeetingId);
+      
       await fetch(
-        `${this.baseUrl}/${meetingId}/end`,
+        `${this.baseUrl}/meetings/${encodedMeetingId}/end`,
         this.getFetchConfig('POST')
       );
       
-      console.log(`Meeting ${meetingId} ended`);
+      console.log(`Meeting ${validMeetingId} ended`);
     } catch (error) {
       console.error('Failed to end meeting:', error);
     }
@@ -449,8 +623,15 @@ class MeetingApiService {
 
   async getParticipants(meetingId: string): Promise<any[]> {
     try {
+      const validMeetingId = this.extractMeetingId(meetingId);
+      if (!validMeetingId) {
+        throw new Error(`Invalid meeting ID format: ${meetingId}`);
+      }
+
+      const encodedMeetingId = encodeURIComponent(validMeetingId);
+      
       const response = await fetch(
-        `${this.baseUrl}/${meetingId}/participants`,
+        `${this.baseUrl}/meetings/${encodedMeetingId}/participants`,
         this.getFetchConfig('GET')
       );
 
@@ -462,16 +643,32 @@ class MeetingApiService {
   }
 
   generateMeetingLink(meetingId: string): string {
-    return `${window.location.origin}/meeting/${meetingId}`;
+    const validMeetingId = this.extractMeetingId(meetingId);
+    if (!validMeetingId) {
+      console.error('Cannot generate link for invalid meeting ID:', meetingId);
+      return `${window.location.origin}/meeting/invalid`;
+    }
+    return `${window.location.origin}/meeting/${encodeURIComponent(validMeetingId)}`;
   }
 
   // WebRTC signaling methods
   async sendSignal(meetingId: string, signal: any): Promise<void> {
     try {
+      const validMeetingId = this.extractMeetingId(meetingId);
+      if (!validMeetingId) {
+        throw new Error(`Invalid meeting ID format: ${meetingId}`);
+      }
+
+      // Ensure real-time connection before sending signals
+      const realTimeConnected = await this.ensureRealTimeConnection();
+      if (!realTimeConnected) {
+        throw new Error('Real-time connection not available for WebRTC signaling');
+      }
+
       // Primary: Send via WebSocket real-time
       realTimeService.send({
         type: 'webrtc_signal',
-        meetingId,
+        meetingId: validMeetingId,
         signal
       });
     } catch (error) {
@@ -479,15 +676,25 @@ class MeetingApiService {
     }
   }
 
-  subscribeToSignals(meetingId: string, callback: (signal: any) => void) {
-    realTimeService.subscribe(`meeting:${meetingId}:webrtc`, callback);
+  async subscribeToSignals(meetingId: string, callback: (signal: any) => void): Promise<void> {
+    const validMeetingId = this.extractMeetingId(meetingId);
+    if (!validMeetingId) {
+      console.error('Cannot subscribe to signals for invalid meeting ID:', meetingId);
+      return;
+    }
+
+    // Ensure real-time connection before subscribing
+    const realTimeConnected = await this.ensureRealTimeConnection();
+    if (realTimeConnected) {
+      realTimeService.subscribe(`meeting:${validMeetingId}:webrtc`, callback);
+    }
   }
 
   // Authentication check method
   async checkAuth(): Promise<boolean> {
     try {
       const response = await fetch(
-        `http://localhost:4000/api/auth/check`, // Updated to match your auth structure
+        `${this.baseUrl}/auth/check`,
         this.getFetchConfig('GET')
       );
       return response.ok;
@@ -501,7 +708,7 @@ class MeetingApiService {
   async refreshAuthIfNeeded(): Promise<boolean> {
     try {
       const response = await fetch(
-        `http://localhost:4000/api/auth/refresh`,
+        `${this.baseUrl}/auth/refresh`,
         this.getFetchConfig('POST')
       );
       return response.ok;
@@ -510,6 +717,71 @@ class MeetingApiService {
       return false;
     }
   }
+
+  // Helper method to validate meeting ID format
+  isValidMeetingId(meetingId: string): boolean {
+    // Meeting IDs should be in format: abc-def-ghi (3 segments of 3 chars each)
+    const meetingIdPattern = /^[a-z0-9]{3}-[a-z0-9]{3}-[a-z0-9]{3}$/;
+    return meetingIdPattern.test(meetingId);
+  }
+
+  // Helper method to extract meeting ID from various inputs
+  extractMeetingId(input: string): string | null {
+    if (!input || typeof input !== 'string') {
+      return null;
+    }
+
+    const trimmedInput = input.trim();
+
+    // If it's already a valid meeting ID, return it
+    if (this.isValidMeetingId(trimmedInput)) {
+      return trimmedInput;
+    }
+
+    // Try to extract from URL if it's a meeting link
+    try {
+      const url = new URL(trimmedInput);
+      const pathParts = url.pathname.split('/');
+      const lastPart = pathParts[pathParts.length - 1];
+      if (this.isValidMeetingId(lastPart)) {
+        return lastPart;
+      }
+    } catch {
+      // Not a valid URL, continue
+    }
+
+    // Try to extract from hash fragment
+    if (trimmedInput.includes('#')) {
+      const hashPart = trimmedInput.split('#')[1];
+      if (hashPart && this.isValidMeetingId(hashPart)) {
+        return hashPart;
+      }
+    }
+
+    // Log invalid meeting ID attempts for debugging
+    console.warn('Invalid meeting ID format received:', input);
+    
+    // If no valid ID found, return null
+    return null;
+  }
+
+  // Cleanup method to properly disconnect
+  async cleanup(): Promise<void> {
+    if (this.connectionTimeout) {
+      clearTimeout(this.connectionTimeout);
+      this.connectionTimeout = null;
+    }
+
+    this.realTimeConnectionPromise = null;
+    this.realTimeInitialized = false;
+
+    try {
+      await realTimeService.disconnect();
+    } catch (error) {
+      console.error('Error during cleanup:', error);
+    }
+  }
 }
 
-export const meetingApi = new MeetingApiService();
+// Export singleton instance
+export const meetingApi = MeetingApiService.getInstance();
